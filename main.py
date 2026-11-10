@@ -3,15 +3,15 @@ import pandas_ta as ta
 import numpy as np
 from parquet_DC import ParquetCandleStore
 
-# 1. Загрузка данных из Parquet
+# 1. Load data from Parquet
 store = ParquetCandleStore()
 df = store.load('BTC/USDT', '1h')
 
-# --- НАСТРОЙКА ПЕРИОДА БЭКТЕСТА ---
+# --- BACKTEST PERIOD SETTINGS ---
 START_DATE = "2026-02-01"
 END_DATE = "2026-03-01"
 
-# 2. Расчет индикаторов на ПОЛНОМ датасете (чтобы убрать NaN / прогреть EMA)
+# 2. Calculate indicators on the FULL dataset (to remove NaN / warm up EMA)
 df['ema_fast'] = ta.ema(df['close'], length=20)
 df['ema_slow'] = ta.ema(df['close'], length=50)
 df['rsi_14'] = ta.rsi(df['close'], length=14)
@@ -33,7 +33,7 @@ df['bb_lower'] = bb_df['BBL_20_2.0_2.0']
 df['bb_middle'] = bb_df['BBM_20_2.0_2.0']
 df['bb_upper'] = bb_df['BBU_20_2.0_2.0']
 
-# 3. Фильтрация по датам ПОСЛЕ расчета индикаторов
+# 3. Filter by dates AFTER calculating indicators
 df['timestamp'] = pd.to_datetime(df['timestamp'])
 
 if START_DATE:
@@ -44,11 +44,11 @@ if END_DATE:
 df = df.reset_index(drop=True)
 
 if df.empty:
-    raise ValueError(f"Нет данных за период с {START_DATE} по {END_DATE}")
+    raise ValueError(f"No data for the period from {START_DATE} to {END_DATE}")
 
-print(f"Период бэктеста: с {df['timestamp'].min()} по {df['timestamp'].max()} (всего свечей: {len(df)})")
+print(f"Backtest period: from {df['timestamp'].min()} to {df['timestamp'].max()} (total candles: {len(df)})")
 
-# 4. Подготовка NumPy массивов
+# 4. Prepare NumPy arrays
 ema_fast = df['ema_fast'].to_numpy()
 ema_slow = df['ema_slow'].to_numpy()
 rsi = df['rsi_14'].to_numpy()
@@ -66,24 +66,24 @@ low = df['low'].to_numpy()
 close = df['close'].to_numpy()
 timestamps = df['timestamp'].to_numpy()
 
-# Сдвиг для поиска пересечения без утечки крайнего элемента (устраняем баг np.roll)
+# Shift to detect the crossover without leaking the edge element (fixes the np.roll bug)
 prev_fast = np.empty_like(ema_fast)
 prev_slow = np.empty_like(ema_slow)
 
-# Первую свечу заполняем исходным значением, чтобы не было фантомного пересечения
+# Fill the first candle with the original value to avoid a phantom crossover
 prev_fast[0] = ema_fast[0]
 prev_slow[0] = ema_slow[0]
 
-# Заполняем остальные элементы со сдвигом 1
+# Fill the remaining elements with a shift of 1
 prev_fast[1:] = ema_fast[:-1]
 prev_slow[1:] = ema_slow[:-1]
 
-# Векторное условие входа
+# Vectorized entry condition
 buy_signals = (prev_fast <= prev_slow) & (ema_fast > ema_slow) & (rsi <= 60)
-# Явно зануляем сигнал на самый первый бар выбранного отрезка
+# Explicitly zero out the signal on the very first bar of the selected range
 buy_signals[0] = False
 
-# 5. Быстрый цикл бэктеста
+# 5. Fast backtest loop
 balance = 1000.0
 position = None
 STOP_LOSS_PCT = 0.03
@@ -93,7 +93,7 @@ trades = []
 n_rows = len(df)
 for i in range(1, n_rows):
 
-    # ПРОВЕРКА ВХОДА
+    # ENTRY CHECK
     if position is None:
         if buy_signals[i]:
             entry_price = close[i]
@@ -104,7 +104,7 @@ for i in range(1, n_rows):
                 'time': timestamps[i]
             }
 
-    # ПРОВЕРКА ВЫХОДА
+    # EXIT CHECK
     else:
         curr_high = high[i]
         curr_low = low[i]
@@ -115,7 +115,7 @@ for i in range(1, n_rows):
         stop_loss = curr_low <= sl_level
 
         if take_profit or stop_loss:
-            # Консервативная оценка: если задело и TP и SL на одной свече — считаем SL
+            # Conservative estimate: if both TP and SL are hit on the same candle, assume SL
             exit_price = sl_level if (stop_loss and take_profit) else (tp_level if take_profit else sl_level)
 
             pnl_pct = (exit_price - position['entry_price']) / position['entry_price']
@@ -130,10 +130,10 @@ for i in range(1, n_rows):
             })
             position = None
 
-# Вывод результатов
+# Output results
 profit_trades = [t['pnl'] for t in trades if t['pnl'] > 0]
 lose_trades = [t['pnl'] for t in trades if t['pnl'] <= 0]
 
-print(f"Итоговый баланс: ${balance:.2f}")
-print(f"Всего сделок: {len(trades)}")
-print(f"Профитные сделки: {len(profit_trades)} | Убыточные: {len(lose_trades)}")
+print(f"Final balance: ${balance:.2f}")
+print(f"Total trades: {len(trades)}")
+print(f"Profitable trades: {len(profit_trades)} | Losing trades: {len(lose_trades)}")
